@@ -1,0 +1,17 @@
+node_modules/
+dist/
+
+.idea/
+venv/
+distilgpt2-finetuned/
+
+*.app
+*.exe
+*.war
+
+*.mp4
+*.tiff
+*.avi
+*.flv
+*.mov
+*.wmv
