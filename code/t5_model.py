@@ -1,10 +1,8 @@
 import os
-import numpy as np
-import pandas as pd
-import torch
+
 from datasets import load_dataset, DatasetDict, load_from_disk
 from transformers import (
-    AutoTokenizer, AutoModelForCausalLM, DataCollatorForLanguageModeling,
+    AutoTokenizer, DataCollatorForLanguageModeling,
     Trainer, TrainingArguments, T5ForConditionalGeneration
 )
 # Define constants
@@ -113,6 +111,7 @@ def main():
         logging_steps=50,
         save_total_limit=2,
         load_best_model_at_end=True,
+        report_to="none"
     )
 
     trainer = Trainer(
