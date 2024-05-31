@@ -18,10 +18,10 @@ tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
 context_length = 128
 model = AutoModelForCausalLM.from_pretrained(
         model_checkpoint, pad_token_id=tokenizer.eos_token_id)
-device = f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu"
+#device = f"cuda:{torch.cuda.current_device()}" if torch.cuda.is_available() else "cpu"
 
 def generate(
-        prompt=None, max_length=100, greedy=True, model=model, tokenizer=tokenizer, device=device
+        prompt=None, max_length=100, greedy=True, model=model, tokenizer=tokenizer
 ):
     """Generar texto con sampling (greedy=False) o greedy search (greedy=True)
 
@@ -40,7 +40,7 @@ def generate(
     model.eval()
     with torch.no_grad():
         if prompt:
-            input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+            input_ids = tokenizer.encode(prompt, return_tensors="pt")
             outputs = model.generate(input_ids, do_sample=do_sample, max_length=max_length,
                                      pad_token_id=tokenizer.eos_token_id)
         else:
@@ -51,7 +51,7 @@ def generate(
 if __name__ == '__main__':
     model.load_state_dict(torch.load("./distilgpt2-finetuned/pytorch_model.bin"))
     model.eval()
-    model.to(device)
 
-    res_ = generate('I will always love you')
+
+    res_ = generate('dog is cute')
     print(res_)

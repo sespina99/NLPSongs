@@ -1,44 +1,45 @@
-import re, os
+import os
+import re
 
-import numpy as np
-import pandas as pd
-import torch
-#import wandb
-from datasets import load_dataset, DatasetDict
-from IPython.display import display, HTML
+from datasets import load_dataset, DatasetDict, load_from_disk
 from transformers import (
     AutoTokenizer, AutoModelForCausalLM, DataCollatorForLanguageModeling,
     Trainer, TrainingArguments
 )
-from transformers.trainer_callback import PrinterCallback
-from transformers.utils.notebook import NotebookProgressCallback
-
-
 
 
 model_checkpoint = "distilgpt2"
 tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
-context_length = 128
-
-def tokenize_fn(example):
-    """Tokeniza `text` de examples de un dataset.
-    Returns only input_ids.
+context_length = 512
+def clean_text(example):
+    """Corrige caracteres raros segun la doc de yelp
     """
+    texto = re.sub(r'\n', '\n', example["lyrics"]) # real newlines
+    texto = re.sub(r'\"', '"', texto) # comillas de verdad
+    example["text"] = texto
+    return example
+def tokenize_fn(examples):
+    titles = examples["title"]
+    genres = examples["tag"]
+    lyrics = examples["lyrics"]
 
+    # Combinar título, género y letra en una sola cadena para cada ejemplo
+    inputs = [f"--TITLE--: {title} --GENRE--:{genre} --LYRICS--:{lyric}" for title, genre, lyric in zip(titles, genres, lyrics)]
 
-
+    # Tokenizar las cadenas combinadas
     outputs = tokenizer(
-        example["lyrics"],
+        inputs,
         truncation=True,
         max_length=context_length,
         return_overflowing_tokens=True,
         return_length=True,
+        padding="max_length"
     )
     return {"input_ids": outputs["input_ids"]}
 
 
 def train_model():
-    dataset = load_dataset("csv", data_files="D:/User/Nerdex/Descargas/ITBA/2024-1Q/NLP/song_lyrics_filtered.csv")
+    dataset = load_dataset("csv", data_files="/Users/micacapart/Downloads/song_lyrics_filtered 2.csv")
     dataset = dataset.shuffle()
 
     aux = dataset.shape['train'][0]
@@ -52,19 +53,31 @@ def train_model():
     )
 
     print(dataset.shape['train'][0])
+    print(*dataset["train"].features.items(), sep="\n")
+    tokenizer.pad_token = tokenizer.eos_token
+    small_dataset = small_dataset.map(clean_text)
 
-    tokenized_dataset = small_dataset.map(
-        tokenize_fn, batched=True, num_proc=4,
-        remove_columns=small_dataset["train"].column_names)
+    tokenized_dataset_dir = './tokenized_dataset'
+
+    if os.path.exists(tokenized_dataset_dir):
+        tokenized_dataset = load_from_disk(tokenized_dataset_dir)
+        print("Tokenized dataset loaded successfully.")
+    else:
+        print(f"Tokenized dataset directory '{tokenized_dataset_dir}' does not exist.")
+        tokenized_dataset = small_dataset.map(
+            tokenize_fn, batched=True, num_proc=4,
+            remove_columns=small_dataset["train"].column_names)
+        tokenized_dataset.save_to_disk('./tokenized_dataset')
 
     print(small_dataset)
 
     print(tokenized_dataset)
 
+
     model = AutoModelForCausalLM.from_pretrained(
         model_checkpoint, pad_token_id=tokenizer.eos_token_id)
 
-    tokenizer.pad_token = tokenizer.eos_token
+
     data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
 
     pretrained_model_name = model_checkpoint.split("/")[-1]
@@ -91,7 +104,7 @@ def train_model():
         logging_dir='./logs',  # logging
         logging_strategy="steps",
         logging_steps=1,
-        fp16=True,  # float16 en training (only on CUDA)
+        fp16=False,  # float16 en training (only on CUDA)
         push_to_hub=False,
         #    report_to="wandb",  # enable logging to W&B
         save_safetensors=False  # por un bug
