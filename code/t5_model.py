@@ -1,42 +1,61 @@
+from transformers import Trainer, TrainingArguments
+from datasets import load_dataset, DatasetDict, load_from_disk
+from transformers import T5Tokenizer, T5ForConditionalGeneration, DataCollatorForSeq2Seq
 import os
 
-from datasets import load_dataset, DatasetDict, load_from_disk
-from transformers import (
-    AutoTokenizer, DataCollatorForLanguageModeling,
-    Trainer, TrainingArguments, T5ForConditionalGeneration
-)
-# Define constants
-MODEL_CHECKPOINT = "t5-base"
-CONTEXT_LENGTH = 128
-DATA_FILE = "/Users/micacapart/Downloads/song_lyrics_filtered 2.csv"  # Update with your dataset path
+# Constants
+MODEL_CHECKPOINT = "t5-small"
+DATA_FILE = "/Users/micacapart/Downloads/songs_english.csv"
 SEED = 42
-BATCH_SIZE = 16
+BATCH_SIZE = 4
 LEARNING_RATE = 5e-5
-NUM_EPOCHS = 3
+NUM_EPOCHS = 5
+WARMUP_STEPS = 1000
+WEIGHT_DECAY = 0.01
+SAVE_STEPS = 100
+EVAL_STEPS = 100
 
+# Initialize tokenizer and model
+tokenizer = T5Tokenizer.from_pretrained(MODEL_CHECKPOINT)
+model = T5ForConditionalGeneration.from_pretrained(MODEL_CHECKPOINT)
 
-# Initialize tokenizer
-tokenizer = AutoTokenizer.from_pretrained(MODEL_CHECKPOINT)
+max_source_length = 512
+max_target_length = 512
 
-
+os.environ["WANDB_DISABLED"] = "true"
 
 def tokenize_fn(examples):
-    """Tokenizes `lyrics` from examples in a dataset."""
-    titles = examples["title"]
-    genres = examples["tag"]
-    lyrics = examples["lyrics"]
+    task_prefix = "Generate song from title and genre: "
+    inputs = [f"{task_prefix}{title} - {genre}" for title, genre in zip(examples["title"], examples["tag"])]
+    targets = examples["lyrics"]
 
-    inputs = [f"--TITLE--: {title} --GENRE--:{genre} --LYRICS--:{lyric}" for title, genre, lyric in
-              zip(titles, genres, lyrics)]
-    outputs = tokenizer(
+    # Tokenize inputs
+    encoding = tokenizer(
         inputs,
-        truncation=True,
-        max_length=CONTEXT_LENGTH,
         padding="max_length",
-        return_tensors="pt"  # Return PyTorch tensors
+        max_length=max_source_length,
+        truncation=True,
     )
-    return outputs
+    input_ids, attention_mask = encoding["input_ids"], encoding["attention_mask"]
 
+    # Tokenize targets
+    with tokenizer.as_target_tokenizer():
+        target_encoding = tokenizer(
+            targets,
+            padding="max_length",
+            max_length=max_target_length,
+            truncation=True,
+        )
+    labels = target_encoding["input_ids"]
+
+    # Replace padding token id's of the labels by -100 so they're ignored by the loss
+    labels = [[label if label != tokenizer.pad_token_id else -100 for label in label_ids] for label_ids in labels]
+
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels
+    }
 
 def prepare_dataset(data_file):
     """Loads the dataset from a CSV file and splits it into train, validation, and test sets."""
@@ -59,22 +78,12 @@ def prepare_dataset(data_file):
         "test": test_dataset
     })
 
-
 def main():
     # Prepare the dataset
     dataset = prepare_dataset(DATA_FILE)
 
-    print(f"Total dataset size: {len(dataset['train']) + len(dataset['val']) + len(dataset['test'])}")
-    print(f"Training set size: {len(dataset['train'])}")
-    print(f"Validation set size: {len(dataset['val'])}")
-    print(f"Test set size: {len(dataset['test'])}")
-
     # Tokenize the dataset
-    # tokenized_dataset = dataset.map(
-    #     tokenize_fn, batched=True, num_proc=4,
-    #     remove_columns=dataset["train"].column_names
-    # )
-    tokenized_dataset_dir = './tokenized_dataset_t5'
+    tokenized_dataset_dir = './tokenized_dataset_t5_2'
 
     if os.path.exists(tokenized_dataset_dir):
         tokenized_dataset = load_from_disk(tokenized_dataset_dir)
@@ -86,45 +95,50 @@ def main():
             remove_columns=dataset["train"].column_names)
         tokenized_dataset.save_to_disk(tokenized_dataset_dir)
 
-    print("Tokenized dataset:")
-    print(tokenized_dataset)
+    # DataCollator
+    data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)
 
-    # Load the model
-    model = T5ForConditionalGeneration.from_pretrained(MODEL_CHECKPOINT)
-
-    data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
-
+    # TrainingArguments
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir='./results',
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         per_device_eval_batch_size=BATCH_SIZE,
         learning_rate=LEARNING_RATE,
-        weight_decay=0.01,
-        warmup_steps=500,
-        lr_scheduler_type="linear",
+        weight_decay=WEIGHT_DECAY,
+        warmup_ratio=0.1,
+        lr_scheduler_type="cosine",
         evaluation_strategy="steps",
-        eval_steps=100,
-        save_steps=100,
+        eval_steps=EVAL_STEPS,
+        save_strategy="steps",
+        load_best_model_at_end=True,
+        save_total_limit=2,
+        save_steps=SAVE_STEPS,
         logging_dir='./logs',
         logging_strategy="steps",
-        logging_steps=50,
-        save_total_limit=2,
-        load_best_model_at_end=True,
-        report_to="none"
+        logging_steps=100,
+        fp16=False,
+        push_to_hub=False,
+        save_safetensors=False,
+        report_to=None,  # Disable reporting to wandb
     )
 
+    # Initialize Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
         data_collator=data_collator,
         train_dataset=tokenized_dataset["train"],
-        eval_dataset=tokenized_dataset["val"]
+        eval_dataset=tokenized_dataset["val"],
     )
 
-    trainer.train()  # Start training
-    trainer.save_model()  # Save the final model
+    # Train the model
+    trainer.train()
 
+    # Save the model
+    trainer.save_model()
+    tokenizer.save_pretrained("./t5_song_generator")
+    print("Training complete. Model saved.")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
