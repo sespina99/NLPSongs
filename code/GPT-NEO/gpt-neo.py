@@ -44,12 +44,11 @@ def train_model():
 
     sorted_dataset = dataset.sort("views", reverse=True)
     sorted_dataset = sorted_dataset.filter(lambda x: x['tag'] == 'pop')
-    sorted_dataset = sorted_dataset.shuffle()
-    # print(sorted_dataset[:5])
+    
 
     # Calculate the new size to be 5% of the original dataset size
     total_size = len(sorted_dataset)
-    new_size = 3000
+    new_size = 1000
 
     # Select the top 5% of the dataset
     reduced_dataset = sorted_dataset.select(range(new_size))
